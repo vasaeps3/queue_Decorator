@@ -1,12 +1,13 @@
-import { Subject, } from 'rxjs';
-import { concatMap, tap } from 'rxjs/operators';
+import {Subject, } from 'rxjs';
+import {concatMap, tap} from 'rxjs/operators';
 
 
 export interface IQueueParams {
   delay?: number;
   maxFlow?: number;
 }
-export function Queue(params?: IQueueParams): MethodDecorator {
+
+export function Queue({delay = 0, maxFlow = Number.MAX_VALUE}: IQueueParams = {}): MethodDecorator {
 
   return function (target: Object, propertyKey: string | symbol, descriptor: PropertyDescriptor) {
     let countPromises = 0;
@@ -16,18 +17,29 @@ export function Queue(params?: IQueueParams): MethodDecorator {
 
     sequencePromise
       .pipe(
-        concatMap(([args, self]) =>
-          new Promise((resolve, reject) => {
-            if (params && params.maxFlow < countPromises) {
-              reject('Too many flows!');
+        concatMap(async ([args, self]: [IArguments, any]) => {
+          await new Promise((resolve, reject) => {
+            if (maxFlow < countPromises) {
+              reject(new Error('Too many flows!'));
             }
-            setTimeout(() => resolve(), !!countPromises && params && params.delay || 0);
-          })
-            .then(() => originalMethod.apply(self, args)
-              .then((res: any) => { outputPromise.next([args, res]); })
-            )
-        ),
-        tap(() => { --countPromises; }),
+
+            if (countPromises && delay) {
+              setTimeout(
+                () => {
+                  resolve();
+                },
+                delay
+              );
+            } else {
+              resolve();
+            }
+          });
+            
+          outputPromise.next([args, originalMethod.apply(self, args)]);
+        }),
+        tap(() => {
+          countPromises--;
+        }),
       )
       .subscribe();
 
@@ -35,9 +47,10 @@ export function Queue(params?: IQueueParams): MethodDecorator {
       const orArguments = arguments;
       sequencePromise.next([arguments, this]);
       ++countPromises;
+
       return new Promise((resolve) => {
         outputPromise
-          .subscribe(([args, res]) => {
+          .subscribe(([args, res]: [IArguments, any]) => {
             if (args === orArguments) {
               resolve(res);
             }
